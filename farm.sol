@@ -16,11 +16,11 @@ contract Farm is Context,SafeControl,Ownable {
     bool private adminOperatelocked=false;//管理员进行 算力写入和donate时加锁，防止此时领取
 
 
-    uint private totalAllocPoint;//总的算力
+    uint public totalAllocPoint=1;//总的算力
     mapping(address => uint256) private allocPoint;//账户--算力
     uint256 public lastRewardBlock;//上次结算时区块
     uint256 public rewardTokenPerBlock;//每个区块的奖励
-    uint256 public reapedReward;//已领取的奖励和
+    uint256 public reapedRewardTotal;//已领取的奖励和
 
 
     constructor(uint256 _rewardTokenPerBlock) {
@@ -42,14 +42,14 @@ contract Farm is Context,SafeControl,Ownable {
         //更新算力
         uint count=_tos.length;
         for(uint i=0;i<count;i++){
-            totalAllocPoint.add(_computPower[i]).sub(allocPoint[_tos[i]]);//更新总算力
+            totalAllocPoint=totalAllocPoint.add(_computPower[i]).sub(allocPoint[_tos[i]]);//更新总算力
             allocPoint[_tos[i]]=_computPower[i];//更新算力
         }
         //结算未领取的 金额 捐赠 多次更新算力时不会重复捐赠
         if(lastRewardBlock+1000>block.number){
             uint256 totalLessToken=getRewardTokenBlockReward();
-            uint256 donateToken=totalLessToken-reapedReward;//计算需要 donate的token数量
-            reapedReward=0;//累计领取置零
+            uint256 donateToken=totalLessToken-reapedRewardTotal;//计算需要 donate的token数量
+            reapedRewardTotal=0;//累计领取置零
             lastRewardBlock =  block.number;//新的区块起点
             myerc20.transfer(address(myERC20Addr),donateToken);//MBT转移至MBT合约账户  捐赠
         }
@@ -101,10 +101,10 @@ contract Farm is Context,SafeControl,Ownable {
     }
     //计算区块总奖励
     function getRewardTokenBlockReward() public view returns (uint256) {
-        if(lastRewardBlock<=block.number){
+        if(lastRewardBlock>block.number){
              return 0;
         }
-       return lastRewardBlock.sub(block.number).mul(rewardTokenPerBlock);//距离上次更新顺利时的区快数-当前区块   x    每个区块的奖励 = 区块数总奖励
+       return block.number.sub(lastRewardBlock).mul(rewardTokenPerBlock);//当前区块-上次更新时的区快数   x    每个区块的奖励 = 区块数总奖励
     }
 
     /*...
@@ -124,13 +124,32 @@ contract Farm is Context,SafeControl,Ownable {
             return false;
         }
         uint256 tokenReward = blockReward.mul(allocPoint[_msgSender()]).div(totalAllocPoint);//更具  user算力与总算力的占比 计算自己能获得的token
+        reapedRewardTotal=reapedRewardTotal.add(tokenReward);//累加已领取
+        //totalAllocPoint=totalAllocPoint.sub(allocPoint[_msgSender()]);//总算力减少  不用改变
         allocPoint[_msgSender()]=0;//用户算力归零  下次更新算力前不能再收获了
-        reapedReward.add(tokenReward);//累加已领取
         myerc20.transfer(_msgSender(),tokenReward);//MBT转移至用户账户
         return true;
     }
     
+    /*...
+    函数名：reapView  
+    MBT领取预查看 函数调用者msg.sender 更具 算力与经历的区块数量 计算收益
+    */
+    function reapView(address addr) public view returns (uint256) {
+        require(addr!=address(0),"CA");
+        require(allocPoint[addr]>0,"your allocPoint < 0");//算力必须大于0
+        require(adminOperatelocked==false,"admin Operate locked");
 
+        if (block.number <= lastRewardBlock) {//领取收益当时的blockNumber > 上一次领取时的blockNumber
+            return 0;
+        }
+        uint256 blockReward = getRewardTokenBlockReward();//计算从上次更新算力后的 累计区块 奖励
+        if (blockReward <= 0) {
+            return 0;
+        }
+        uint256 tokenReward = blockReward.mul(allocPoint[addr]).div(totalAllocPoint);//更具  user算力与总算力的占比 计算自己能获得的token
+        return tokenReward;
+    }
 
     
     //approve 锁，防止重放攻击
