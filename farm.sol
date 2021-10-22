@@ -32,7 +32,6 @@ contract Farm is Context,SafeControl,Ownable {
    /*...
     函数名：update  
     更新用户算力，更新总算力，并结算捐赠 ，置零累计领取，更新上次结算时区块。
-    注意：未来避免多次结算捐赠，需要在1000个区块时间内完成 多次批量写入
     */
     function setupdate(address[] memory _tos, uint256[] memory _computPower,uint _rewardTokenPerBlock,uint _pice)  public adminOperatelock returns(bool) {
         require(Address.isContract(_msgSender())==false,"CA");
