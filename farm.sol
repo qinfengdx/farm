@@ -16,8 +16,9 @@ contract Farm is Context,SafeControl,Ownable {
     bool private adminOperatelocked=false;//管理员进行 算力写入和donate时加锁，防止此时领取
 
 
-    mapping( uint256=>uint256) public totalAllocPoint;//总的算力
+    mapping(uint256=>uint256) public totalAllocPoint;//周期--总的算力
     mapping(uint256 => mapping(address => uint256)) private allocPoint;//周期--账户--算力
+    uint public totalReaped;//周期--已领取
     uint256 public pice=0;//周期
     uint256 public lastRewardBlock;//上次结算时区块
     uint256 public rewardTokenPerBlock;//每个区块的奖励
@@ -45,7 +46,9 @@ contract Farm is Context,SafeControl,Ownable {
             totalAllocPoint[pice]=totalAllocPoint[pice].add(_computPower[i]);//更新 累加总算力
             allocPoint[pice][_tos[i]]=_computPower[i];//更新算力
         }
-        uint256 lessToken=getRewardTokenBlockReward();
+        uint256 blockReward = getRewardTokenBlockReward();//计算从上次更新算力后的 累计区块 奖励
+        uint256 lessToken=blockReward-totalReaped;
+        totalReaped=0;
         lastRewardBlock =  block.number;//新的区块起点
         myerc20.mint(address(this),lessToken);//mint剩余区块的累计奖励 到合约
         //账户合约全部余额捐赠
@@ -123,14 +126,10 @@ contract Farm is Context,SafeControl,Ownable {
             return false;
         }
         uint256 tokenReward = blockReward.mul(allocPoint[pice][_msgSender()]).div(totalAllocPoint[pice]);//更具  user算力与总算力的占比 计算自己能获得的token
-        totalAllocPoint[pice]=totalAllocPoint[pice].sub(allocPoint[pice][_msgSender()]);//总算力减少
         allocPoint[pice][_msgSender()]=0;//用户算力归零  下次更新算力前不能再收获了
-
-        lastRewardBlock=block.number;
-
-
-        require(myerc20.mint(address(this),blockReward), "mint error");//mint总的区块的奖励 到合约
-        myerc20.transfer(_msgSender(),tokenReward);//MBT转移 user能够获得的 至用户账户
+        totalReaped= totalReaped.add(tokenReward);//记录已领取的
+        require(myerc20.mint(address(this),tokenReward), "mint error");//mint 奖励 tokenReward 到合约
+        myerc20.transfer(_msgSender(),tokenReward);//MBT转移 user能够获得的 tokenReward 至用户账户
         return true;
     }
     
