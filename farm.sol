@@ -10,17 +10,17 @@ import "./MyERC20.sol";
 contract Farm is Context,SafeControl,Ownable {
     using SafeMath for uint256;
     address private minter;//管理员
-    address private myERC20Addr=0x315201d6B5bE13C6764c39Ea106D827396F0D651;//MBT address
+    address private myERC20Addr=0xeca182999fe00D41e229e4061CA40954B8EaE5ED;//MBT address
     MyERC20 private myerc20=MyERC20(myERC20Addr);
     uint256 private aproveunlocked=1;//领取锁，防止重放攻击
     bool private adminOperatelocked=false;//管理员进行 算力写入和donate时加锁，防止此时领取
 
 
-    uint public totalAllocPoint=1;//总的算力
-    mapping(address => uint256) private allocPoint;//账户--算力
+    mapping( uint256=>uint256) public totalAllocPoint;//总的算力
+    mapping(uint256 => mapping(address => uint256)) private allocPoint;//周期--账户--算力
+    uint256 public pice=0;//周期
     uint256 public lastRewardBlock;//上次结算时区块
     uint256 public rewardTokenPerBlock;//每个区块的奖励
-    uint256 public reapedRewardTotal;//已领取的奖励和
 
 
     constructor(uint256 _rewardTokenPerBlock) {
@@ -34,26 +34,25 @@ contract Farm is Context,SafeControl,Ownable {
     更新用户算力，更新总算力，并结算捐赠 ，置零累计领取，更新上次结算时区块。
     注意：未来避免多次结算捐赠，需要在1000个区块时间内完成 多次批量写入
     */
-    function update(address[] memory _tos, uint256[] memory _computPower,uint _rewardTokenPerBlock)  public adminOperatelock returns(bool) {
+    function setupdate(address[] memory _tos, uint256[] memory _computPower,uint _rewardTokenPerBlock,uint _pice)  public adminOperatelock returns(bool) {
         require(Address.isContract(_msgSender())==false,"CA");
         require(_msgSender()==minter,"not admin");
         //更新每个区块的奖励
         rewardTokenPerBlock=_rewardTokenPerBlock;
+        pice=_pice;//更新周期 
         //更新算力
         uint count=_tos.length;
         for(uint i=0;i<count;i++){
-            totalAllocPoint=totalAllocPoint.add(_computPower[i]).sub(allocPoint[_tos[i]]);//更新总算力
-            allocPoint[_tos[i]]=_computPower[i];//更新算力
+            totalAllocPoint[pice]=totalAllocPoint[pice].add(_computPower[i]);//更新 累加总算力
+            allocPoint[pice][_tos[i]]=_computPower[i];//更新算力
         }
-        //结算未领取的 金额 捐赠 多次更新算力时不会重复捐赠
-        if(lastRewardBlock+1000>block.number){
-            uint256 totalLessToken=getRewardTokenBlockReward();
-            uint256 donateToken=totalLessToken-reapedRewardTotal;//计算需要 donate的token数量
-            reapedRewardTotal=0;//累计领取置零
-            lastRewardBlock =  block.number;//新的区块起点
-            myerc20.transfer(address(myERC20Addr),donateToken);//MBT转移至MBT合约账户  捐赠
-        }
-        
+        uint256 lessToken=getRewardTokenBlockReward();
+        lastRewardBlock =  block.number;//新的区块起点
+        myerc20.mint(address(this),lessToken);//mint剩余区块的累计奖励 到合约
+        //账户合约全部余额捐赠
+        uint256 donateToken= myerc20.balanceOf(address(this));
+        myerc20.transfer(address(myERC20Addr),donateToken);//MBT转移至MBT合约账户  捐赠
+            
         
         return true;
     }
@@ -84,7 +83,7 @@ contract Farm is Context,SafeControl,Ownable {
     返回值：可领取MBT的数量
     */
     function computationalPowerOf(address addr) public view returns (uint256) {
-        return allocPoint[addr];
+        return allocPoint[pice][addr];
     }
     /*...
     函数名：computationalPowerOfBatch
@@ -95,13 +94,13 @@ contract Farm is Context,SafeControl,Ownable {
         uint len=addrs.length;
         uint256[] memory res=new uint256[](len);
         for(uint i=0;i<len;i++){
-            res[i]=allocPoint[addrs[i]];
+            res[i]=allocPoint[pice][addrs[i]];
         }
         return res;
     }
     //计算区块总奖励
     function getRewardTokenBlockReward() public view returns (uint256) {
-        if(lastRewardBlock>block.number){
+        if(lastRewardBlock>=block.number){
              return 0;
         }
        return block.number.sub(lastRewardBlock).mul(rewardTokenPerBlock);//当前区块-上次更新时的区快数   x    每个区块的奖励 = 区块数总奖励
@@ -112,10 +111,11 @@ contract Farm is Context,SafeControl,Ownable {
     MBT领取 函数调用者msg.sender 更具 算力与经历的区块数量 计算收益,领取后msg.sender账户算力 归零
     */
     function reap() public approvelock returns (bool) {
-        require(Address.isContract(_msgSender())==false&&_msgSender()!=address(0),"CA");
-        require(allocPoint[_msgSender()]>0,"your allocPoint < 0");//算力必须大于0
+        require(Address.isContract(_msgSender())==false,"CA");
         require(adminOperatelocked==false,"admin Operate locked");
-
+        if(allocPoint[pice][_msgSender()]<=0){//算力0返回
+            return false;
+        }
         if (block.number <= lastRewardBlock) {//领取收益当时的blockNumber > 上一次领取时的blockNumber
             return false;
         }
@@ -123,11 +123,15 @@ contract Farm is Context,SafeControl,Ownable {
         if (blockReward <= 0) {
             return false;
         }
-        uint256 tokenReward = blockReward.mul(allocPoint[_msgSender()]).div(totalAllocPoint);//更具  user算力与总算力的占比 计算自己能获得的token
-        reapedRewardTotal=reapedRewardTotal.add(tokenReward);//累加已领取
-        //totalAllocPoint=totalAllocPoint.sub(allocPoint[_msgSender()]);//总算力减少  不用改变
-        allocPoint[_msgSender()]=0;//用户算力归零  下次更新算力前不能再收获了
-        myerc20.transfer(_msgSender(),tokenReward);//MBT转移至用户账户
+        uint256 tokenReward = blockReward.mul(allocPoint[pice][_msgSender()]).div(totalAllocPoint[pice]);//更具  user算力与总算力的占比 计算自己能获得的token
+        totalAllocPoint[pice]=totalAllocPoint[pice].sub(allocPoint[pice][_msgSender()]);//总算力减少
+        allocPoint[pice][_msgSender()]=0;//用户算力归零  下次更新算力前不能再收获了
+
+        lastRewardBlock=block.number;
+
+
+        require(myerc20.mint(address(this),blockReward), "mint error");//mint总的区块的奖励 到合约
+        myerc20.transfer(_msgSender(),tokenReward);//MBT转移 user能够获得的 至用户账户
         return true;
     }
     
@@ -136,10 +140,11 @@ contract Farm is Context,SafeControl,Ownable {
     MBT领取预查看 函数调用者msg.sender 更具 算力与经历的区块数量 计算收益
     */
     function reapView(address addr) public view returns (uint256) {
-        require(addr!=address(0),"CA");
-        require(allocPoint[addr]>0,"your allocPoint < 0");//算力必须大于0
-        require(adminOperatelocked==false,"admin Operate locked");
-
+        require(adminOperatelocked==false&&addr!=address(0),"admin Operate locked  and not address0");
+        if(allocPoint[pice][addr]<=0)//算力必须大于0
+        {
+            return 0;
+        }
         if (block.number <= lastRewardBlock) {//领取收益当时的blockNumber > 上一次领取时的blockNumber
             return 0;
         }
@@ -147,7 +152,7 @@ contract Farm is Context,SafeControl,Ownable {
         if (blockReward <= 0) {
             return 0;
         }
-        uint256 tokenReward = blockReward.mul(allocPoint[addr]).div(totalAllocPoint);//更具  user算力与总算力的占比 计算自己能获得的token
+        uint256 tokenReward = blockReward.mul(allocPoint[pice][addr]).div(totalAllocPoint[pice]);//更具  user算力与总算力的占比 计算自己能获得的token
         return tokenReward;
     }
 
