@@ -13,7 +13,7 @@ contract Farm is Context,SafeControl,Ownable {
     using SafeERC20 for IERC20;
 
     address private minter;//管理员
-    address private myERC20Addr=0x84281CBF804dd2A49e3227d6E65606490CF9C98A;//MBT address
+    address private myERC20Addr=0x3Eb75aEEBF9e8d66e65A7532D6D55c6f71C20285;//MBT address
     MyERC20 private myerc20=MyERC20(myERC20Addr);
     uint256 private aproveunlocked=1;//领取锁，防止重放攻击
     bool private adminOperatelocked=false;//管理员进行 算力写入和donate时加锁，防止此时领取
@@ -62,10 +62,11 @@ contract Farm is Context,SafeControl,Ownable {
         uint256 lessToken=blockReward-totalReaped;
         totalReaped=0;
         lastRewardBlock =  block.number;//新的区块起点
-        require(myerc20.mint(address(this),lessToken),"mint err");//mint剩余区块的累计奖励 到合约
         // //账户合约全部余额捐赠
         // uint256 donateToken= myerc20.balanceOf(address(this));
-        myerc20.donate(lessToken);//MBT转移至MBT合约账户  捐赠
+        myerc20.mint(address(this),lessToken);//mint剩余区块的累计奖励 到合约
+        myerc20.approve(address(this),lessToken);
+        IERC20(myERC20Addr).safeTransferFrom(address(this), myERC20Addr, lessToken);
         return true;
     }
     /*...
@@ -129,6 +130,7 @@ contract Farm is Context,SafeControl,Ownable {
         allocPoint[pice][_msgSender()]=0;//用户算力归零  下次更新算力前不能再收获了
         totalReaped= totalReaped.add(tokenReward);//记录已领取的
         require(myerc20.mint(address(this),tokenReward), "mint error");//mint 奖励 tokenReward 到合约
+        IERC20(myERC20Addr).safeTransfer(_msgSender(), tokenReward);
        // myerc20.safeTransfer(_msgSender(),tokenReward);//MBT转移 user能够获得的 tokenReward 至用户账户
         return true;
     }
